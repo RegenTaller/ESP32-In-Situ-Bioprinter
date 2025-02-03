@@ -22,22 +22,22 @@
 gpio_num_t APHASE1_PIN = GPIO_NUM_32;
 gpio_num_t BPHASE1_PIN = GPIO_NUM_33;
 
-gpio_num_t PWM1_PIN = GPIO_NUM_19;
+gpio_num_t PWM1_PIN = GPIO_NUM_21;
 gpio_num_t IN1_PIN = GPIO_NUM_27;
 gpio_num_t IN2_PIN = GPIO_NUM_14;
-#define SPEED_1 19
+#define SPEED_1 21
 #define IN_1 27
 #define IN_2 14
 
-#define APH2_pin 25
-#define BPH2_pin 26
-gpio_num_t APHASE2_PIN = GPIO_NUM_25;
-gpio_num_t BPHASE2_PIN = GPIO_NUM_26;
+#define APH2_pin 34
+#define BPH2_pin 35
+gpio_num_t APHASE2_PIN = GPIO_NUM_34;
+gpio_num_t BPHASE2_PIN = GPIO_NUM_35;
 
-gpio_num_t PWM2_PIN = GPIO_NUM_21;
+gpio_num_t PWM2_PIN = GPIO_NUM_22;
 gpio_num_t IN3_PIN = GPIO_NUM_12;
 gpio_num_t IN4_PIN = GPIO_NUM_13;
-#define SPEED_2 21
+#define SPEED_2 22
 #define IN_3 12
 #define IN_4 13
 
@@ -60,7 +60,7 @@ int Dduty = 0;
 int _accel = 30000;    //ускорение в отсчётах энкодера в секунду
 int _maxSpeed = 8344;  //максимальная скорость в отсчётах энкодера в секунду
 
-const uint8_t _dt = 15;          //Временной шаг вызова функции регулирования
+const uint8_t _dt = 20;          //Временной шаг вызова функции регулирования
 float _dts = (float)_dt / 1000;  //Временной шаг для подсчёта в единицах в секунду теор. значений скоростей V и позиций pos
 uint32_t _tmr2 = 0;              //Переменная таймера comp_cur_pos для подсчёта значений V и pos
 long _targetPos = 0;             //Целевое положение в отсчётах энкодера
@@ -187,11 +187,11 @@ int prevPWM1, prevPWM2;
 
 /////////////////////ГЛАВНЫЙ ПРИВОД//////////////////////
 /////////////////////////////////////////////////////////
-#define MICROSTEPS 64  // Set to the microsteps that the motor needs
+#define MICROSTEPS 16  // Set to the microsteps that the motor needs
 
 uint16_t controlSteps_Saved = 0;  //Сохранённая позиция моторов. Нужна для отсутствия сбития положения при отключении контроллера.
 float MM_na_oborot = 31.141592;   // Миллиметров будет пройдено за один оборот. Диаметр шестерни 10 мм.
-int microsteps = 64;              // количество микрошагов двигателя
+int microsteps = 16;              // количество микрошагов двигателя
 // Motor Settings
 float MM_na_Shag = MM_na_oborot / (200 * MICROSTEPS);  // Миллиметров будет пройдено за один шаг. 200 - полных шагов двигателя на оборот
 float speedMMs = 20;                                   // Скорость в мм/с
@@ -310,12 +310,12 @@ void setup() {
   Serial.begin(115200);
   SerialBT.begin("ESP Test");
 
-  MainPinMode();  //Setting pins for main drivers and sensor
-  setTRIGTimer();
-  setECHOTimer();
-  StepperSetup();
+  MainPinMode();  // Setting pins for main drivers and sensor
+  setTRIGTimer(); // Setting timer for sensor and main drivers
+  setECHOTimer(); // Setting ECHO pulse width measurement timer
+  StepperSetup(); // Stepper motor drivers settings
 
-  DispenserPinMode();
+  DispenserPinMode(); // Setting pins for dispanser encoders and motors
   Calculus(_accel, _maxSpeed, _targetPos, _dts);
 
   SetDispenser();
@@ -330,7 +330,7 @@ void loop() {
 
   inputData();
   
-  comp_cur_pos();
+  //comp_cur_pos();
   prevPWM2 = PWM2;
   prevPWM1 = PWM1;
 
@@ -349,7 +349,7 @@ void loop() {
 
   static uint32_t tim2;
 
-  if (millis() - tim2 >= 7) {  //Расчёт редукции ПИД и движение
+  if (millis() - tim2 >= 20) {  //Расчёт редукции ПИД и движение
 
     VelocitiesN();
 
@@ -368,10 +368,10 @@ void loop() {
   }
 
   static uint32_t tim1; 
-  if (millis() - tim1 >= 25) { // Вывод в COM
+  if (millis() - tim1 >= 30) { // Вывод в COM
     if (PrintDataFlag == 1) {
       POSITIONS();
-      Serial.println(" ");
+      //Serial.println(" ");
       //Serial.println(PWM2);
       //VELS();
     }
@@ -380,7 +380,7 @@ void loop() {
   }
 
   static long t2; 
-  if (millis() - t2 >= 200) { // Сохранение позиции главного привода
+  if (millis() - t2 >= 500) { // Сохранение позиции главного привода
 
     t2 = millis();
 
@@ -392,7 +392,7 @@ void loop() {
   }
 
   static long timp2;
-  if (millis() >= timp2 + 10) {
+  if (millis() - timp2 >=  5) {
 
     dist = pulse_duration * coeff;
     filtered = Filter.updateEstimate(dist);  //Фильтрация значения дистанции
@@ -1154,9 +1154,9 @@ void MainPinMode() {
 
 void setTRIGTimer() {
 
-  timer = timerBegin(40000000);  // Timer 0, Prescaler 80 (1us tick)
+  timer = timerBegin(10000000);  // Timer 0, Prescaler 80 (1us tick)
   timerAttachInterrupt(timer, &onTimer);
-  timerAlarm(timer, 400, true, 0);  // Set to trigger every 1ms
+  timerAlarm(timer, 100, true, 0);  // Set to trigger every 1ms
 }
 
 void setECHOTimer() {
