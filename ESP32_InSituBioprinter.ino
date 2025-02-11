@@ -11,6 +11,8 @@
 
 #include <SimpleKalmanFilter.h>
 
+BluetoothSerial SerialBT;
+
 #define _sign(x) ((x) > 0 ? 1 : -1)  //Сигнум для смены приращения скорости на уменьшение
 // PWM configuration
 #define PWM_FREQUENCY 20000  // Frequency in Hz (1kHz)
@@ -45,10 +47,9 @@ gpio_num_t LED = GPIO_NUM_2;
 
 volatile long enc1;
 
-BluetoothSerial SerialBT;
 static const int spiClk = 1000000;  // 1 MHz
 //uninitalised pointers to SPI objects
-SPIClass *vspi = NULL;
+SPIClass* vspi = NULL;
 
 /////////////////////////////////////////////////////
 /////////////////////////////////////////////////////
@@ -151,7 +152,7 @@ int N = 0;  // Число шагов дискретизации
 
 int8_t curve = 1;  //Тип кривой. -1 - пересечение парабол 2 - нормальный случай, 1 - только ускорение и равномерное
 
-long f = 0;       //счётчик приращения
+long f = 0;  //счётчик приращения
 
 /////////////////////////////////////////////////////////////////////
 
@@ -195,11 +196,15 @@ int microsteps = 16;              // количество микрошагов �
 // Motor Settings
 float MM_na_Shag = MM_na_oborot / (200 * MICROSTEPS);  // Миллиметров будет пройдено за один шаг. 200 - полных шагов двигателя на оборот
 float speedMMs = 20;                                   // Скорость в мм/с
+float maxSP = 20;
+float minSP = 10;
+long newSP;
 
 float Freq_MOT = speedMMs / MM_na_Shag;        // Шагов в секунду при данной скорости
 float period_MOT = 1000000.0 / Freq_MOT;       // Микросекунд на шаг при данной скорости
 float MOT_ISR_Tact = (period_MOT / (10)) / 2;  // Сколько тактов нужно для данной конфигурации таймера 519 мкс для 150 мм/с, значит 51,9 тактов для N = 159
 
+volatile int MOT_ISR_NMAX = round(MOT_ISR_Tact);;
 volatile int MOT_ISR_N = round(MOT_ISR_Tact);  // ОКРУГЛЁННОЕ ЗНАЧЕНИЕ ШАГОВ. Определяет скорость вращения мотора.
 
 bool en = 1;  //ОТКЛЮЧЕНИЕ ЛОГИКИ ДРАЙВЕРА
@@ -207,7 +212,7 @@ bool en = 1;  //ОТКЛЮЧЕНИЕ ЛОГИКИ ДРАЙВЕРА
 volatile uint16_t counterSteps = 0;  //Реальное количество поданных импульсов/сделанных шагов, получаемое в ISR. Без учёта потерь
 
 int direction = 0;                //Направление
-float controlPosStepper = 0;             //Необходимая позиция в мм. Пропорциональна количеству шагов
+float controlPosStepper = 0;      //Необходимая позиция в мм. Пропорциональна количеству шагов
 unsigned int controlStepPos = 0;  //Необходимая позиция в шагах, зависящая от позиции в миллиметрах
 
 unsigned int MAXSteps = 40000;  //ОГРАНИЧИТЕЛЬ ШАГОВ
@@ -228,6 +233,7 @@ const float coeff = (float)1.0 / 10000.0 * 335.0 / 2.0;
 #define EN 15   // No enable pin used
 #define DIR 16  // No direction pin used
 #define STEP 17
+gpio_num_t EN_PIN = GPIO_NUM_15;
 gpio_num_t DIR_PIN = GPIO_NUM_16;
 gpio_num_t STEP_PIN = GPIO_NUM_17;
 
@@ -297,7 +303,7 @@ void IRAM_ATTR echoISR() {
 
   if (digitalRead(ECHO_PIN)) {                     // Rising edge detected
     timerWrite(timer1, 0);                         // Reset timer
-    timerAlarm(timer1, 9999999, false, 10000000);  // Start the timer
+    timerAlarm(timer1, 999999, false, 1000000);  // Start the timer
     countEcho++;
   } else {                               // Falling edge detected
     pulse_duration = timerRead(timer1);  // Get the timer count in µs
@@ -308,35 +314,32 @@ void IRAM_ATTR echoISR() {
 void setup() {
 
   Serial.begin(115200);
-  SerialBT.begin("ESP Test");
+  SerialBT.begin("InSitu-Bioprinter");
 
-  MainPinMode();  // Setting pins for main drivers and sensor
-  setTRIGTimer(); // Setting timer for sensor and main drivers
-  setECHOTimer(); // Setting ECHO pulse width measurement timer
-  StepperSetup(); // Stepper motor drivers settings
+  MainPinMode();   // Setting pins for main drivers and sensor
+  setTRIGTimer();  // Setting timer for sensor and main drivers
+  setECHOTimer();  // Setting ECHO pulse width measurement timer
+  StepperSetup();  // Stepper motor drivers settings
 
-  DispenserPinMode(); // Setting pins for dispanser encoders and motors
+  DispenserPinMode();  // Setting pins for dispanser encoders and motors
   Calculus(_accel, _maxSpeed, _targetPos, _dts);
 
   SetDispenser();
 
   _tmr2 = tpid = millis();
-
 }
 
 int8_t fl = 1;
 
-void loop() {
+void IRAM_ATTR loop() {
 
-  inputData();
-  
   //comp_cur_pos();
   prevPWM2 = PWM2;
   prevPWM1 = PWM1;
 
   //CommunicationBT();
-  static uint32_t tim0; 
-  if (millis() - tpid >= _dt) { // Расчёт ПИД
+  static uint32_t tim0;
+  if (millis() - tpid >= _dt) {  // Расчёт ПИД
 
     comp_cur_pos();
     Velocities(_dt);
@@ -364,13 +367,16 @@ void loop() {
 
     movement(PWM2, 2);
     movement(PWM1, 1);
+    
     tim2 = millis();
   }
 
-  static uint32_t tim1; 
-  if (millis() - tim1 >= 30) { // Вывод в COM
+  static uint32_t tim1;
+  if (millis() - tim1 >= 100) {  // Вывод в COM
     if (PrintDataFlag == 1) {
       POSITIONS();
+      Serial.println("");
+      Serial.println(newSP);
       //Serial.println(" ");
       //Serial.println(PWM2);
       //VELS();
@@ -379,29 +385,31 @@ void loop() {
     tim1 = millis();
   }
 
-  static long t2; 
-  if (millis() - t2 >= 500) { // Сохранение позиции главного привода
+  static long t2;
+  if (millis() - t2 >= 750) {  // Сохранение позиции главного привода
 
     t2 = millis();
 
     if (PrintDataFlag == 1) {
     }
 
+    inputData();
+    CommunicationBT();
     EEPROM.put(32, counterSteps);  //Обновление сохранённого значения позиции моторов
     EEPROM.commit();
   }
 
   static long timp2;
-  if (millis() - timp2 >=  5) {
+  if (millis() - timp2 >= 10) {
 
     dist = pulse_duration * coeff;
     filtered = Filter.updateEstimate(dist);  //Фильтрация значения дистанции
-
+    //filtered = dist;
+    //speedCORR();
     StepMotGen();
 
     timp2 = millis();
   }
-
 }
 
 void SetDispenser() {
@@ -410,7 +418,7 @@ void SetDispenser() {
   setObor(0);
   setSpeedMMS(1);
   setMinDuty(250);
-  
+
   static long controlPos_Saved, encoderValue1_Saved, encoderValue2_Saved;
   EEPROM.begin(1024);
   EEPROM.get(0, controlPos_Saved);
@@ -419,7 +427,6 @@ void SetDispenser() {
   controlPosStepper = _targetPos = controlPos_Saved;
   encoderValue1 = encoderValue1_Saved;
   encoderValue2 = encoderValue2_Saved;
-
 }
 
 void DispenserPinMode() {
@@ -451,45 +458,6 @@ void DispenserPinMode() {
   ledcAttach(PWM2_PIN, PWM_FREQUENCY, PWM_RESOLUTION);
   ledcAttach(PWM1_PIN, PWM_FREQUENCY, PWM_RESOLUTION);
   delay(1000);
-
-}
-
-void CommunicationBT() {
-
-  if (SerialBT.available() > 0) {
-
-    String dannie = "";
-
-    while (SerialBT.available()) {
-
-      while (SerialBT.available()) {
-
-        dannie = dannie + SerialBT.readString();
-      }
-    }
-
-    dannie.trim();
-    //Serial.println("");
-    Serial.println(dannie);
-
-    if (dannie.indexOf("sp") != -1) {
-
-      uint8_t sppos = dannie.indexOf("sp") + 2;
-      String speedrec = dannie.substring(sppos, sppos + 3);
-      int receivedspeed = constrain(speedrec.toInt(), 1, 100);
-      Serial.println("received speed: " + String(receivedspeed));
-      SerialBT.println("received speed: " + String(receivedspeed));
-      //recalculation(1, receivedspeed);
-    }
-
-    if (dannie.indexOf("1") != -1) {
-      SerialBT.println("One received");
-      Serial.println("One received");
-    } else {
-      SerialBT.println("Another command");
-      Serial.println("Another command");
-    }
-  }
 }
 
 void pin_A2_ISR() {
@@ -819,8 +787,10 @@ void movement(int _Duty, int motor) {  //Приведение ШИМ к мини
   bool stopper2 = 0;
 
   if ((abs(encoderValue1) + stopzone1 > _targetPos) && abs(_Duty) < 12) {
-    digitalWrite(IN_1, 1);
-    digitalWrite(IN_2, 1);
+    //digitalWrite(IN_1, 1);
+    gpio_set_level(IN1_PIN, 1);
+    //digitalWrite(IN_2, 1);
+    gpio_set_level(IN2_PIN, 1);
     ledcWrite(SPEED_1, _maxDuty);
     integral1 = 0;
     stopper1 = 1;
@@ -831,8 +801,10 @@ void movement(int _Duty, int motor) {  //Приведение ШИМ к мини
 
   if ((abs(encoderValue2) + stopzone2 > _targetPos) && abs(_Duty) < 12) {
 
-    digitalWrite(IN_3, 1);
-    digitalWrite(IN_4, 1);
+    gpio_set_level(IN3_PIN, 1);
+    gpio_set_level(IN4_PIN, 1);
+    //digitalWrite(IN_3, 1);
+    //digitalWrite(IN_4, 1);
     ledcWrite(SPEED_2, _maxDuty);
     integral2 = 0;
     stopper2 = 1;
@@ -844,13 +816,17 @@ void movement(int _Duty, int motor) {  //Приведение ШИМ к мини
 
     if (Dduty > 0) {
 
-      digitalWrite(IN_1, level);
-      digitalWrite(IN_2, !level);
+      gpio_set_level(IN1_PIN, level);
+      gpio_set_level(IN2_PIN, !level);
+      //digitalWrite(IN_1, level);
+      //digitalWrite(IN_2, !level);
       ledcWrite(SPEED_1, PWM);
     } else {
 
-      digitalWrite(IN_1, !level);
-      digitalWrite(IN_2, level);
+      gpio_set_level(IN1_PIN, !level);
+      gpio_set_level(IN2_PIN, level);
+      // digitalWrite(IN_1, !level);
+      // digitalWrite(IN_2, level);
       ledcWrite(SPEED_1, PWM);
     }
 
@@ -858,14 +834,18 @@ void movement(int _Duty, int motor) {  //Приведение ШИМ к мини
 
     if (Dduty > 0) {
 
-      digitalWrite(IN_3, level);
-      digitalWrite(IN_4, !level);
+      gpio_set_level(IN3_PIN, level);
+      gpio_set_level(IN4_PIN, !level);
+      // digitalWrite(IN_3, level);
+      // digitalWrite(IN_4, !level);
       ledcWrite(SPEED_2, PWM);
 
     } else {
 
-      digitalWrite(IN_3, !level);
-      digitalWrite(IN_4, level);
+      gpio_set_level(IN3_PIN, !level);
+      gpio_set_level(IN4_PIN, level);
+      // digitalWrite(IN_3, !level);
+      // digitalWrite(IN_4, level);
       ledcWrite(SPEED_2, PWM);
     }
   }
@@ -1154,9 +1134,9 @@ void MainPinMode() {
 
 void setTRIGTimer() {
 
-  timer = timerBegin(10000000);  // Timer 0, Prescaler 80 (1us tick)
+  timer = timerBegin(10000000);
   timerAttachInterrupt(timer, &onTimer);
-  timerAlarm(timer, 100, true, 0);  // Set to trigger every 1ms
+  timerAlarm(timer, 100, true, 0);  // Set to trigger every 10 us
 }
 
 void setECHOTimer() {
@@ -1207,23 +1187,45 @@ void StepMotGen() {
 
     direction = 1;
     en = 0;
-    digitalWrite(EN, en);
-    digitalWrite(DIR, direction);
+    gpio_set_level(EN_PIN, en);
+    gpio_set_level(DIR_PIN, direction);
+    //digitalWrite(EN, en);
+    //digitalWrite(DIR, direction);
 
   } else if (counterSteps > controlStepPos && counterSteps >= MINSteps) {  //Движение вверх
 
     direction = 0;
     en = 0;
-    digitalWrite(EN, en);
-    digitalWrite(DIR, direction);
+    gpio_set_level(EN_PIN, en);
+    gpio_set_level(DIR_PIN, direction);
+    //digitalWrite(EN, en);
+    //digitalWrite(DIR, direction);
 
   } else if (counterSteps >= controlStepPos && counterSteps <= controlStepPos) {  //Остановка, если в зоне равновесия
 
     en == 1;
-    digitalWrite(EN, en);
-    digitalWrite(DIR, 0);
+    gpio_set_level(EN_PIN, en);
+    gpio_set_level(DIR_PIN, 0);
+    // digitalWrite(EN, en);
+    // digitalWrite(DIR, 0);
   }
 }
+
+void speedCORR() {
+
+  long deltaPOS = counterSteps - controlStepPos;
+  if (deltaPOS < 0) { deltaPOS = deltaPOS * -1; }
+  //newSP = (deltaPOS * MM_na_Shag) / (controlStepPos * MM_na_Shag) * maxSP + minSP;
+  newSP = 3*MOT_ISR_NMAX - (((float)(deltaPOS) / (2048)) * 2*MOT_ISR_NMAX);
+  //newSP = MOT_ISR_NMAX;
+  //if (newSP < minSP) { newSP = minSP; }
+  //if (newSP > maxSP) { newSP = maxSP; }
+  if (newSP < MOT_ISR_NMAX) { newSP = MOT_ISR_NMAX; }
+  if (newSP > 200) { newSP = 200;}
+  MOT_ISR_N = newSP;
+  //recalculation(1, newSP);
+}
+
 /////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////COM Communication////////////////////////////
@@ -1256,6 +1258,25 @@ void inputData() {
     dannie.trim();
     //Serial.println("");
     Serial.println("Received: " + dannie);
+
+    if (dannie.indexOf("sp") != -1) {
+
+      uint8_t sppos = dannie.indexOf("sp") + 2;
+      String speedrec = dannie.substring(sppos, sppos + 6);
+      float receivedspeed = constrain(speedrec.toInt(), 1, 300);
+      Serial.println("received speed: " + String(receivedspeed));
+      maxSP = receivedspeed;
+      recalculation(1, receivedspeed);
+    }
+
+    if (dannie.indexOf("sh") != -1) {
+
+      uint8_t shpos = dannie.indexOf("sh") + 2;
+      String Shiftrec = dannie.substring(shpos, shpos + 6);
+      float receivedshift = constrain(Shiftrec.toInt(), 0.0, 82.0);
+      Serial.println("received shift: " + String(receivedshift));
+      recalculation(2, receivedshift);
+    }
 
     if (dannie.indexOf("vel") != -1) {
 
@@ -1492,5 +1513,332 @@ void inputData() {
       }
     }
     //Serial.println(dannie);
+  }
+}
+
+void CommunicationBT() {
+
+  if (SerialBT.available() > 0) {
+
+    String dannie = "";
+
+    while (SerialBT.available()) {
+
+      while (SerialBT.available()) {
+
+        dannie = dannie + SerialBT.readString();
+      }
+    }
+
+    dannie.trim();
+    //Serial.println("");
+    Serial.println(dannie);
+    SerialBT.println(dannie);
+
+    if (dannie.indexOf("sp") != -1) {
+
+      uint8_t sppos = dannie.indexOf("sp") + 2;
+      String speedrec = dannie.substring(sppos, sppos + 6);
+      int receivedspeed = constrain(speedrec.toInt(), 1, 300);
+      Serial.println("received speed: " + String(receivedspeed));
+      SerialBT.println("received speed: " + String(receivedspeed));
+      maxSP = receivedspeed;
+      recalculation(1, receivedspeed);
+    }
+
+    if (dannie.indexOf("sh") != -1) {
+
+      uint8_t shpos = dannie.indexOf("sh") + 2;
+      String Shiftrec = dannie.substring(shpos, shpos + 6);
+      float receivedshift = constrain(Shiftrec.toInt(), 0.0, 82.0);
+      Serial.println("received shift: " + String(receivedshift));
+      SerialBT.println("received shift: " + String(receivedshift));
+      recalculation(2, receivedshift);
+    }
+
+    if (dannie.indexOf("vel") != -1) {
+
+      uint8_t vpos = dannie.indexOf("vel") + 3;
+      String vel = dannie.substring(vpos, vpos + 6);
+      int receivedvelocity = constrain(vel.toInt(), 0, 17000);
+      Serial.println("received velocity: " + String(receivedvelocity));
+      SerialBT.println("received velocity: " + String(receivedvelocity));
+      //recalculation(1, receivedspeed);
+      _maxSpeed = receivedvelocity;
+      defaultPWMFlag1 = defaultPWMFlag2 = _minDuty;
+    }
+
+    if (dannie.indexOf("velMMS") != -1) {
+
+      uint8_t velMMSpos = dannie.indexOf("velMMS") + 6;
+      String velMMS = dannie.substring(velMMSpos, velMMSpos + 6);
+      float receivedvelMMS = constrain(velMMS.toFloat(), 0, 3.5);
+      Serial.println("received velocity in mm/s: " + String(receivedvelMMS));
+      SerialBT.println("received velocity in mm/s: " + String(receivedvelMMS));
+      //recalculation(1, receivedspeed);
+      setSpeedMMS(receivedvelMMS);
+      defaultPWMFlag1 = defaultPWMFlag2 = _minDuty;
+    }
+
+    if (dannie.indexOf("tpos") != -1) {
+
+      uint8_t tppos = dannie.indexOf("tpos") + 4;
+      String tposrec = dannie.substring(tppos);
+      long receivedtpos = constrain(tposrec.toInt(), -250000, 250000);
+      Serial.println("received target position: " + String(receivedtpos));
+      SerialBT.println("received target position: " + String(receivedtpos));
+      _targetPos = receivedtpos;
+      defaultPWMFlag1 = defaultPWMFlag2 = 0;
+      defaultPWM1 = defaultPWM2 = _minDuty;
+    }
+
+    if (dannie.indexOf("acc") != -1) {
+
+      uint8_t accpos = dannie.indexOf("acc") + 3;
+      String accrec = dannie.substring(accpos, accpos + 6);
+      int receivedacc = constrain(accrec.toInt(), 0, 40000);
+      Serial.println("received acceleration: " + String(receivedacc));
+      SerialBT.println("received acceleration: " + String(receivedacc));
+      _accel = receivedacc;
+    }
+
+    if (dannie.indexOf("rk") != -1) {
+
+      uint8_t rkpos = dannie.indexOf("rk") + 2;
+      String rkrec = dannie.substring(rkpos, rkpos + 6);
+      float receivedrk = constrain(rkrec.toFloat(), 0, 100);
+      rkpmax = receivedrk;
+      Serial.println("received REDUCTION rk: " + String(rkpmax));
+      SerialBT.println("received REDUCTION rk: " + String(rkpmax));
+    }
+
+    if (dannie.indexOf("rconst") != -1) {
+
+      uint8_t rconstpos = dannie.indexOf("rconst") + 6;
+      String rconstrec = dannie.substring(rconstpos, rconstpos + 6);
+      float receivedrconst = constrain(rconstrec.toFloat(), 0, 100);
+      rconst = receivedrconst;
+      Serial.println("received REDUCTION CONST: " + String(rconst));
+      SerialBT.println("received REDUCTION CONST: " + String(rconst));
+    }
+
+    if (dannie.indexOf("kp") != -1) {
+
+      uint8_t kppos = dannie.indexOf("kp") + 2;
+      String kprec = dannie.substring(kppos, kppos + 6);
+      float receivedkp = constrain(kprec.toFloat(), 0, 100);
+      Serial.println("received PID kp: " + String(receivedkp));
+      SerialBT.println("received PID kp: " + String(receivedkp));
+      kp = receivedkp;
+    }
+
+    if (dannie.indexOf("ki") != -1) {
+
+      uint8_t kipos = dannie.indexOf("ki") + 2;
+      String kirec = dannie.substring(kipos, kipos + 8);
+      double receivedki = constrain(kirec.toDouble(), 0.0, 100.0);
+      Serial.println("received PID ki: " + String(receivedki));
+      SerialBT.println("received PID ki: " + String(receivedki));
+      ki = receivedki;
+    }
+
+    if (dannie.indexOf("kd") != -1) {
+
+      uint8_t kdpos = dannie.indexOf("kd") + 2;
+      String kdrec = dannie.substring(kdpos, kdpos + 6);
+      double receivedkd = constrain(kdrec.toDouble(), 0.0, 100.0);
+      Serial.println("received PID kd: " + String(receivedkd));
+      SerialBT.println("received PID kd: " + String(receivedkd));
+      kd = receivedkd;
+    }
+
+    if (dannie.indexOf("minDuty") != -1) {
+
+      uint8_t minDutypos = dannie.indexOf("minDuty") + 7;
+      String minDutyrec = dannie.substring(minDutypos, minDutypos + 6);
+      int receivedminDuty = constrain(minDutyrec.toInt(), 0, _maxDuty);
+      Serial.println("received PID MIN Duty: " + String(receivedminDuty));
+      SerialBT.println("received PID MIN Duty: " + String(receivedminDuty));
+      setMinDuty(receivedminDuty);
+    }
+
+    if (dannie.indexOf("maxDuty") != -1) {
+
+      uint8_t maxDutypos = dannie.indexOf("maxDuty") + 7;
+      String maxDutyrec = dannie.substring(maxDutypos, maxDutypos + 6);
+      long receivedmaxDuty = constrain(maxDutyrec.toInt(), 0, 1000000);
+      Serial.println("received PID MAX Duty: " + String(receivedmaxDuty));
+      SerialBT.println("received PID MAX Duty: " + String(receivedmaxDuty));
+      _maxDuty = receivedmaxDuty;
+    }
+
+    if (dannie.indexOf("Z") != -1) {
+
+      uint8_t Zpos = dannie.indexOf("Z") + 1;
+      String Zrec = dannie.substring(Zpos, Zpos + 6);
+      long receivedZ = constrain(Zrec.toInt(), -250000, 250000);
+      Serial.println("received piston pusher Z shift in mm: " + String(receivedZ));
+      SerialBT.println("received piston pusher Z shift in mm: " + String(receivedZ));
+      _targetPos += receivedZ * ratio;
+      _targetPos = constrain(_targetPos, -250000, 250000);
+      defaultPWMFlag1 = defaultPWMFlag2 = 0;
+      defaultPWM1 = defaultPWM2 = _minDuty;
+    }
+
+    if (dannie.indexOf("Zob") != -1) {
+
+      uint8_t Zobpos = dannie.indexOf("Zob") + 3;
+      String Zobrec = dannie.substring(Zobpos, Zobpos + 6);
+      long receivedZob = constrain(Zobrec.toInt(), -200, 200);
+      Serial.println("received piston pusher Z shift in turns: " + String(receivedZob));
+      SerialBT.println("received piston pusher Z shift in turns: " + String(receivedZob));
+      _targetPos += receivedZob * ratio;
+      _targetPos = constrain(_targetPos, -250000, 250000);
+      defaultPWMFlag1 = defaultPWMFlag2 = 0;
+      defaultPWM1 = defaultPWM2 = _minDuty;
+    }
+
+    if (dannie.indexOf("Ztick") != -1) {
+
+      uint8_t Ztickpos = dannie.indexOf("Ztick") + 5;
+      String Ztickrec = dannie.substring(Ztickpos, Ztickpos + 6);
+      long receivedZtick = constrain(Ztickrec.toInt(), -250000, 250000);
+      Serial.println("received piston pusher Z shift in ticks: " + String(receivedZtick));
+      SerialBT.println("received piston pusher Z shift in ticks: " + String(receivedZtick));
+      _targetPos += receivedZtick;
+      _targetPos = constrain(_targetPos, -250000, 250000);
+      defaultPWMFlag1 = defaultPWMFlag2 = 0;
+      defaultPWM1 = defaultPWM2 = _minDuty;
+    }
+
+    if (dannie.indexOf("tposMMS") != -1) {
+
+      uint8_t tposMMSpos = dannie.indexOf("tposMMS") + 7;
+      String tposMMSrec = dannie.substring(tposMMSpos, tposMMSpos + 7);
+      float receivedtposMMS = constrain(tposMMSrec.toFloat(), -200, 200);
+      Serial.println("received target position in mm: " + String(receivedtposMMS));
+      SerialBT.println("received target position in mm: " + String(receivedtposMMS));
+      setMillimeters(receivedtposMMS);
+      defaultPWMFlag1 = defaultPWMFlag2 = 0;
+      defaultPWM1 = defaultPWM2 = _minDuty;
+    }
+
+    if (dannie.indexOf("tposob") != -1) {
+
+      uint8_t tposobpos = dannie.indexOf("tposob") + 6;
+      String tposobrec = dannie.substring(tposobpos, tposobpos + 6);
+      float receivedtposob = constrain(tposobrec.toFloat(), -200, 200);
+      Serial.println("received target position in revs: " + String(receivedtposob));
+      SerialBT.println("received target position in revs: " + String(receivedtposob));
+      setObor(receivedtposob);
+      defaultPWMFlag1 = defaultPWMFlag2 = 0;
+      defaultPWM1 = defaultPWM2 = _minDuty;
+    }
+
+    if (dannie.indexOf("Savepos") != -1) {
+
+      //uint8_t Savepospos = dannie.indexOf("Savepos") + 7;
+      //String Saveposrec = dannie.substring(Savepospos, Savepospos + 6);
+      //float receivedSavepos = constrain(Saveposrec.toFloat(), -500000, 500000);
+      Serial.println("Save position" + String(controlPos));
+      SerialBT.println("Save position" + String(controlPos));
+      SavePos();
+      //defaultPWMFlag1 = defaultPWMFlag2 = 0;
+      //defaultPWM1 = defaultPWM2 = _minDuty;
+    }
+
+    volatile long bauds[] = { 1200, 2400, 4800, 9600, 19200, 31250, 38400, 57600, 74880, 115200, 230400, 250000, 460800, 500000 };
+
+    if (dannie.indexOf("COM") != -1) {
+
+      bool supported = false;
+
+      uint8_t COMBaudpos = dannie.indexOf("COM") + 3;
+      PrintDataFlag = 0;
+      Serial.println("/////Stop Data sending/////");
+      SerialBT.println("/////Stop Data sending/////");
+      long rec = dannie.substring(COMBaudpos).toInt();
+      Serial.println("COM baud REC: " + String(rec));
+      SerialBT.println("COM baud REC: " + String(rec));
+      long NewBaud = constrain(rec, 1200, 500000);
+
+      for (int i = 0; i < sizeof(bauds) / 4; i++) {
+        Serial.println(bauds[i]);
+        if (bauds[i] == NewBaud) {
+
+          supported = true;
+          Serial.println("Supported baud: " + String(bauds[i]));
+          SerialBT.println("Supported baud: " + String(bauds[i]));
+          break;
+
+        } else {
+          supported = false;
+        }
+      }
+
+      if (supported == false) {
+
+        Serial.println("Invalid/Insupported baud");
+        SerialBT.println("Invalid/Insupported baud");
+        Serial.println("NewBaud Is: " + String(NewBaud));
+        SerialBT.println("NewBaud Is: " + String(NewBaud));
+        NewBaud = 115200;
+      }
+
+      Serial.println("NEW BAUD: " + String(NewBaud));
+      SerialBT.println("NEW BAUD: " + String(NewBaud));
+
+      if (NewBaud >= 1200) {
+
+        Serial.end();
+        delay(1500);
+
+        Serial.begin(NewBaud);
+        delay(1000);
+        Serial.println("Successfully applied baud: " + String(NewBaud));
+        SerialBT.println("Successfully applied baud: " + String(NewBaud));
+      }
+    }
+
+    if (dannie.indexOf("PD") != -1) {
+
+      Serial.println("PD");
+      SerialBT.println("PD");
+      PrintDataFlag = !PrintDataFlag;
+
+      if (PrintDataFlag == 1) {
+
+        Serial.println("///////////Data:///////////");
+        SerialBT.println("///////////Data:///////////");
+
+      } else {
+
+        Serial.println("/////Stop Data sending/////");
+        SerialBT.println("/////Stop Data sending/////");
+      }
+    }
+  }
+}
+
+void recalculation(int opID, float val) {
+
+  switch (opID) {
+
+    case 1:  //смена скорости
+
+      Freq_MOT = val / MM_na_Shag;             // Шагов в секунду при данной скорости
+      period_MOT = 1000000.0 / Freq_MOT;       // Микросекунд на шаг при данной скорости
+      MOT_ISR_Tact = (period_MOT / (10)) / 2;  // Сколько тактов нужно для данной конфигурации таймера 519 мкс для 150 мм/с, значит 51,9 тактов для N = 159
+
+      MOT_ISR_N = round(MOT_ISR_Tact);  // ОКРУГЛЁННОЕ ЗНАЧЕНИЕ ШАГОВ. Определяет скорость вращения мотора.
+      MOT_ISR_NMAX = MOT_ISR_N;
+
+      break;
+
+    case 2:
+
+      shift = val;  //изменение отступа
+
+      break;
   }
 }
