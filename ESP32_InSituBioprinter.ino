@@ -14,6 +14,7 @@
 BluetoothSerial SerialBT;
 
 #define _sign(x) ((x) > 0 ? 1 : -1)  //Сигнум для смены приращения скорости на уменьшение
+#define Pi 3.1415926535
 // PWM configuration
 #define PWM_FREQUENCY 20000  // Frequency in Hz (1kHz)
 #define PWM_RESOLUTION 10    // Resolution in bits (0-1023)
@@ -314,6 +315,14 @@ void IRAM_ATTR echoISR() {
 
 uint16_t PDtimer = 100;
 
+/////////////Параметры печати/////////////
+float Width = 0.4;                                         // Ширина линии
+float Height = Width * 0.85;                                // Высота слоя
+float Speed = 40;                                          // Скорость печати в мм/с
+float Volume = Width * Height * Speed;                     // Объёмный расход
+float syrDiam = 14.85;                                           // Диаметр шприца
+float printSpeed = Volume / ((Pi * pow(syrDiam, 2)) / 4);  // Скорость перемещения штока шприца
+
 void setup() {
 
   Serial.begin(115200);
@@ -327,7 +336,7 @@ void setup() {
   DispenserPinMode();  // Setting pins for dispanser encoders and motors
   Calculus(_accel, _maxSpeed, _targetPos, _dts);
 
-  SetDispenser();
+  SetDispenser(printSpeed);
 
   _tmr2 = tpid = millis();
 }
@@ -378,7 +387,7 @@ void IRAM_ATTR loop() {
     if (PrintDataFlag == 1) {
       POSITIONS();
       VELS();
-      Serial.println("");
+      HeadPos();
     }
     tim1 = millis();
   }
@@ -407,11 +416,11 @@ void IRAM_ATTR loop() {
   }
 }
 
-void SetDispenser() {
+void SetDispenser(float ExtrusionSpeed) {
 
   setRatio(8344, 4);
   setObor(0);
-  setSpeedMMS(1);
+  setSpeedMMS(ExtrusionSpeed);
   setMinDuty(250);
 
   static long controlPos_Saved, encoderValue1_Saved, encoderValue2_Saved;
@@ -987,6 +996,7 @@ void Calculus(int acceleration, int V, long targetPos, float dts) {  //Подс�
 bool millFlag = 0;
 bool posflag = 0;
 bool VELflag = 0;
+bool HeadPosFlag = 0;
 void POSITIONS() {  //Вывод позиций столбцами
 
   if (posflag == 1) {
@@ -1054,6 +1064,31 @@ void VELS() {  //Вывод скоростей  столбцами
     SerialBT.print(Velocity1N);
     SerialBT.print(", ");
     SerialBT.print(Velocity2N);
+  }
+}
+
+void HeadPos() {
+
+  if (HeadPosFlag == 1) {
+
+    Serial.println();
+    SerialBT.println();
+    if (millFlag == 1) {
+      Serial.print(millis());
+      Serial.print(", ");
+      SerialBT.print(millis());
+      SerialBT.print(", ");
+    }
+
+    Serial.print(controlStepPos);
+    Serial.print(", ");
+    Serial.print(counterSteps);
+    Serial.print(", ");
+
+    SerialBT.print(controlStepPos);
+    SerialBT.print(", ");
+    SerialBT.print(counterSteps);
+    SerialBT.print(", ");
   }
 }
 
@@ -1232,15 +1267,6 @@ void inputData() {
       while (Serial.available()) {
         dannie = dannie + Serial.readString();
       }
-      //   if (Serial.readBytes(buffer, 1)) {
-      //     //Serial.print("I received: ");
-      //     //Serial.println(buffer[0]);
-      //     dannie = dannie + buffer[0];
-      //   }
-      //   // j++;
-      //   // Serial.print(j);
-      //   // Serial.print(" :  ");
-      //   //Serial.println(buffer[0]);
     }
 
     dannie.trim();
@@ -1555,8 +1581,64 @@ void inputData() {
 
       pos();
     }
+
+    if (dannie.indexOf("Head") != -1) {
+
+      head();
+    }
+
+    if (dannie.indexOf("speed") != -1) {
+
+      uint8_t speedpos = dannie.indexOf("speed") + 5;
+      String speedrec = dannie.substring(speedpos, speedpos + 5);
+      uint16_t receivedspeed = constrain(speedrec.toFloat(), 0, 5000);
+      Serial.println("New Printing Speed: " + String(receivedspeed));
+      SerialBT.println("New Printing Speed: " + String(receivedspeed));
+      Speed = receivedspeed;
+      SyrRecalculation(Height, Width, Speed, syrDiam);
+    }
+
+    if (dannie.indexOf("height") != -1) {
+
+      uint8_t heightpos = dannie.indexOf("height") + 6;
+      String heightrec = dannie.substring(heightpos, heightpos + 5);
+      uint16_t receivedheight = constrain(heightrec.toFloat(), 0, 5000);
+      Serial.println("New layer height: " + String(receivedheight));
+      SerialBT.println("New layer height: " + String(receivedheight));
+      Height = receivedheight;
+      SyrRecalculation(Height, Width, Speed, syrDiam);
+    }
+
+    if (dannie.indexOf("width") != -1) {
+
+      uint8_t widthpos = dannie.indexOf("width") + 5;
+      String widthrec = dannie.substring(widthpos, widthpos + 5);
+      uint16_t receivedwidth = constrain(widthrec.toFloat(), 0, 5000);
+      Serial.println("New line width: " + String(receivedwidth));
+      SerialBT.println("New line width: " + String(receivedwidth));
+      Width = receivedwidth;
+      SyrRecalculation(Height, Width, Speed, syrDiam);
+    }
+
+    if (dannie.indexOf("diameter") != -1) {
+
+      uint8_t diameterpos = dannie.indexOf("diameter") + 8;
+      String diameterrec = dannie.substring(diameterpos, diameterpos + 5);
+      uint16_t receiveddiameter = constrain(diameterrec.toFloat(), 0, 5000);
+      Serial.println("New Diameter: " + String(receiveddiameter));
+      SerialBT.println("New Diameter: " + String(receiveddiameter));
+      syrDiam = receiveddiameter;
+      SyrRecalculation(Height, Width, Speed, syrDiam);
+    }
     //Serial.println(dannie);
   }
+}
+
+void SyrRecalculation(float height, float width, float speed, float syrDiam) {
+
+  float _volume = width * height * speed;                     // Объёмный расход
+  float printSpeed = _volume / ((Pi * pow(syrDiam, 2)) / 4);  // Скорость перемещения штока шприца
+  setSpeedMMS(printSpeed);
 }
 
 void CommunicationBT() {
@@ -1574,7 +1656,6 @@ void CommunicationBT() {
     }
 
     dannie.trim();
-    //Serial.println("");
     Serial.println(dannie);
     SerialBT.println(dannie);
 
@@ -1606,7 +1687,6 @@ void CommunicationBT() {
       int receivedvelocity = constrain(vel.toInt(), 0, 17000);
       Serial.println("received velocity: " + String(receivedvelocity));
       SerialBT.println("received velocity: " + String(receivedvelocity));
-      //recalculation(1, receivedspeed);
       _maxSpeed = receivedvelocity;
       defaultPWMFlag1 = defaultPWMFlag2 = _minDuty;
     }
@@ -1618,7 +1698,6 @@ void CommunicationBT() {
       float receivedvelMMS = constrain(velMMS.toFloat(), 0, 3.5);
       Serial.println("received velocity in mm/s: " + String(receivedvelMMS));
       SerialBT.println("received velocity in mm/s: " + String(receivedvelMMS));
-      //recalculation(1, receivedspeed);
       setSpeedMMS(receivedvelMMS);
       defaultPWMFlag1 = defaultPWMFlag2 = _minDuty;
     }
@@ -1885,6 +1964,55 @@ void CommunicationBT() {
 
       pos();
     }
+
+    if (dannie.indexOf("Head") != -1) {
+
+      head();
+    }
+
+    if (dannie.indexOf("speed") != -1) {
+
+      uint8_t speedpos = dannie.indexOf("speed") + 5;
+      String speedrec = dannie.substring(speedpos, speedpos + 5);
+      uint16_t receivedspeed = constrain(speedrec.toFloat(), 0, 5000);
+      Serial.println("New Printing Speed: " + String(receivedspeed));
+      SerialBT.println("New Printing Speed: " + String(receivedspeed));
+      Speed = receivedspeed;
+      SyrRecalculation(Height, Width, Speed, syrDiam);
+    }
+
+    if (dannie.indexOf("height") != -1) {
+
+      uint8_t heightpos = dannie.indexOf("height") + 6;
+      String heightrec = dannie.substring(heightpos, heightpos + 5);
+      uint16_t receivedheight = constrain(heightrec.toFloat(), 0, 5000);
+      Serial.println("New layer height: " + String(receivedheight));
+      SerialBT.println("New layer height: " + String(receivedheight));
+      Height = receivedheight;
+      SyrRecalculation(Height, Width, Speed, syrDiam);
+    }
+
+    if (dannie.indexOf("width") != -1) {
+
+      uint8_t widthpos = dannie.indexOf("width") + 5;
+      String widthrec = dannie.substring(widthpos, widthpos + 5);
+      uint16_t receivedwidth = constrain(widthrec.toFloat(), 0, 5000);
+      Serial.println("New line width: " + String(receivedwidth));
+      SerialBT.println("New line width: " + String(receivedwidth));
+      Width = receivedwidth;
+      SyrRecalculation(Height, Width, Speed, syrDiam);
+    }
+
+    if (dannie.indexOf("diameter") != -1) {
+
+      uint8_t diameterpos = dannie.indexOf("diameter") + 8;
+      String diameterrec = dannie.substring(diameterpos, diameterpos + 5);
+      uint16_t receiveddiameter = constrain(diameterrec.toFloat(), 0, 5000);
+      Serial.println("New Diameter: " + String(receiveddiameter));
+      SerialBT.println("New Diameter: " + String(receiveddiameter));
+      syrDiam = receiveddiameter;
+      SyrRecalculation(Height, Width, Speed, syrDiam);
+    }
   }
 }
 
@@ -1924,4 +2052,9 @@ void vels() {
 void pos() {
 
   posflag = !posflag;
+}
+
+void head() {
+
+  HeadPosFlag = !HeadPosFlag;
 }
