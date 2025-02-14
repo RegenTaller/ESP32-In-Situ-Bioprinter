@@ -1,0 +1,66 @@
+Заменить "XXXXXX" необходимым значением величины.
+
+tposMMSXXXXXX – Изменить точку назначения в миллиметрах
+tposobXXXXXX – Изменить точку назначения в оборотах винта
+tposXXXXXX - Изменить точку назначения в отсчётах энкодера
+ZXXXXXX - Ввести желаемое значение сдвига в миллиметрах
+ZobXXXXXX - Ввести желаемое значение сдвига в оборотах винта
+ZtickXXXXXX - Ввести желаемое значение сдвига в отсчётах энкодера
+velXXXXXX - Изменить скорость движения в отсчётах энкодера в секунду
+velMMSХХХХХХ – Изменить скорость движения в миллиметрах в секунду
+accXXXXXX - Изменить ускорение движения в отсчётах энкодера в секунду в квадрате
+minDutyXXXXXX - Изменить минимальное значение ШИМ
+maxDutyXXXXXX - Изменить максимальное значение ШИМ
+kpXXXXXX - Изменить пропорциональный коэффициент kp ПИД
+kdXXXXXX - Изменить дифференциальный коэффициент kd ПИД
+kiXXXXXX - Изменить интегральный коэффициент ki ПИД
+rkXXXXXX – Изменить начальный коэффициент редукции ШИМ по первому методу
+rconstXXXXXX – Изменить коэффициент редукции по второму методу
+PD - Переключить вывод и отправку данных через COM.
+COMXXXXXX - Изменить скорость передачи данных COM-подключения
+spXXXXXX - Изменить скорость главного привода диспенсера
+shXXXXXX - Изменить отступ/позицию сопла в миллиметрах
+Savepos - Сохранить данные о позиции толкателя штока шприца
+periodXXXXX - Изменение периода печати занных в Serial, в миллисекундах.
+millis - Переключение вывода миллисекунд перед данными
+VELS - Переключение вывода данных о скорости толкателя штока шприца
+POS - Переключение вывода данных о позиции толкателя штока шприца
+Head - Переключение вывода данных о позиции диспенсера
+speedXXXXX - Изменение скорости печати. В миллиметрах в секунду.
+height - Изменение высоты слоя
+width - Изменение ширины линии
+diameter - Изменение диаметра штока шприца
+
+
+Replace "XXXXXX" with the required value.
+
+tposMMSXXXXXX – Change the destination in millimeters
+tposobXXXXXX – Change the destination in screw revolutions
+tposXXXXXX - Change the destination in encoder counts
+ZXXXXXX - Enter the desired offset value in millimeters
+ZobXXXXXX - Enter the desired offset value in screw revolutions
+ZtickXXXXXX - Enter the desired offset value in encoder counts
+velXXXXXX - Change the speed of movement in encoder counts per second
+velMMSХХХХХХ – Change the speed of movement in millimeters per second
+accXXXXXX - Change the acceleration of movement in encoder counts per second squared
+minDutyXXXXXX - Change the minimum PWM value
+maxDutyXXXXXX - Change the maximum PWM value
+kpXXXXXX - Change the proportional gain kp PID
+kdXXXXXX - Change the differential coefficient kd of PID
+kiXXXXXX - Change the integral coefficient ki of PID
+rkXXXXXX - Change the initial coefficient of PWM reduction by the first method
+rconstXXXXXX - Change the coefficient of reduction by the second method
+PD - Toggle the output and sending of data via COM.
+COMXXXXXX - Change the data transfer rate of the COM connection
+spXXXXXX - Change the speed of the main dispenser drive
+shXXXXXX - Change the offset/position of the nozzle in millimeters
+Savepos - Save the data on the position of the syringe plunger
+periodXXXXX - Change the period of printing data in Serial, in milliseconds.
+millis - Switching the output of milliseconds before data
+VELS - Switching the output of data on the speed of the syringe plunger
+POS - Switching the output of data on the position of the syringe plunger
+Head - Switching the output of data on the position of the dispenser
+speedXXXXX - Changing the print speed. In millimeters per second.
+height - Changing the layer height in millimeters
+width - Changing the line width in millimeters
+diameter - Changing the diameter of the syringe plunger in millimeters
